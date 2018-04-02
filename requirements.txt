@@ -1,0 +1,7 @@
+PySC2 == 1.2
+absl_py == 0.1.11
+gym == 0.10.3
+matplotlib == 2.0.2
+numpy == 1.13.3
+pandas == 0.20.3
+torch == 0.3.1.post2
