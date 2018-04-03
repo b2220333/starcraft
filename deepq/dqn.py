@@ -37,13 +37,17 @@ _SELECT_ALL = [0]
 
 UP, DOWN, LEFT, RIGHT = 'up', 'down', 'left', 'right'
 FLAGS = flags.FLAGS
-
-# Hyper Parameters
-EPSILON = 0.9  # greedy polic
+EPSILON = 0.9
+cuda = torch.cuda.is_available()
+torch.manual_seed(1)
+if cuda:
+    torch.cuda.manual_seed(1)
 
 
 def save_checkpoint(state, filename=''):
     """Save checkpoint if a new best is achieved"""
+    if os.path.exists(filename):
+        os.remove(filename)
     print("=> Saving a new best")
     torch.save(state, filename)  # save checkpoint
 
@@ -53,7 +57,6 @@ def load_checkpoint(model, cuda=False, filename=''):
     if cuda:
         checkpoint = torch.load(filename)
     else:
-        # Load GPU model on CPU
         checkpoint = torch.load(filename,
                                 map_location=lambda storage,
                                                     loc: storage)
@@ -105,8 +108,12 @@ class Net(nn.Module):
 
 
 class DQN(object):
-    def __init__(self, num_actions=3, lr=5e-4):
+    def __init__(self, num_actions=3, lr=5e-4, cuda=False):
         self.eval_net, self.target_net = Net(num_actions), Net(num_actions)
+        self.cuda = cuda
+        if self.cuda:
+            self.eval_net = self.eval_net.cuda()
+            self.target_net = self.target_net.cuda()
         self.num_actions = num_actions
         self.learn_step_counter = 0  # for target updating
         self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=lr)
@@ -114,11 +121,17 @@ class DQN(object):
 
     def choose_action(self, x):
         x = Variable(torch.unsqueeze(torch.FloatTensor(x), 0))
+        if self.cuda:
+            x = x.cuda()
         # input only one sample
         if np.random.uniform() < EPSILON:  # greedy
             actions_value = self.eval_net.forward(x)
-            action = torch.max(actions_value, 1)[1].data.numpy()
-            action = action[0]
+            if self.cuda:
+                action = torch.max(actions_value, 1)[1].cuda().data.numpy()
+                action = action[0].cpu()
+            else:
+                action = torch.max(actions_value, 1)[1].data.numpy()
+                action = action[0]
         else:  # random
             action = np.random.randint(0, self.num_actions)
             action = action
@@ -139,7 +152,8 @@ class DQN(object):
         b_a = Variable(torch.LongTensor(actions.astype(int)))
         b_r = Variable(torch.FloatTensor(rewards))
         b_s_ = Variable(torch.FloatTensor(obses_tp1))
-
+        if self.cuda:
+            b_s, b_a, b_r, b_s_ = b_s.cuda(), b_a.cuda(), b_r.cuda(), b_s_.cuda()
         # q_eval w.r.t the action in experience
         q_eval = self.eval_net(b_s).gather(1, b_a)  # shape (batch, 1)
         q_next = self.target_net(b_s_).detach()  # detach from graph, don't backpropagate
@@ -149,6 +163,8 @@ class DQN(object):
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        if self.cuda:
+            q_eval, q_target = q_eval.cpu(), q_target.cpu()
         return q_eval - q_target
 
 
@@ -200,14 +216,12 @@ def learn(env,
 
     group_id = 0
     reset = True
-    dqn = DQN(
-        num_actions,
-        lr)
+    dqn = DQN(num_actions, lr, cuda)
 
     print('\nCollecting experience...')
     checkpoint_path = 'models/deepq/checkpoint.pth.tar'
     if os.path.exists(checkpoint_path):
-        dqn, saved_mean_reward = load_checkpoint(dqn, filename=checkpoint_path)
+        dqn, saved_mean_reward = load_checkpoint(dqn, cuda, filename=checkpoint_path)
     for t in range(max_timesteps):
         # Take action and update exploration to the newest value
         # custom process for DefeatZerglingsAndBanelings
